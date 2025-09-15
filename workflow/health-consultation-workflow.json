@@ -1,0 +1,421 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "health-chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1824,
+        128
+      ],
+      "id": "db43c2ed-105f-4ec2-81cf-35aa4ec80483",
+      "name": "Webhook",
+      "webhookId": "0d0af50f-4112-4711-93a8-bd65930079ca"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data\nconst body = $input.item.json.body || $input.item.json;\n\n// Check if this is a new conversation (only email) or continuation (has message)\nconst isNewConversation = !body.message && body.userEmail;\nconst isContinuation = body.message && body.userEmail && body.conversation;\n\nif (isNewConversation) {\n    // Handle new conversation\n    return [{\n        json: {\n            userEmail: body.userEmail,\n            conversation: [],\n            questionCount: 0,\n            isComplete: false,\n            userId: `user_${Date.now()}`,\n            isFirstExchange: true\n        }\n    }];\n} else if (isContinuation) {\n    // Handle conversation continuation\n    return [{\n        json: {\n            userEmail: body.userEmail,\n            userMessage: body.message,\n            conversation: body.conversation || [],\n            questionCount: parseInt(body.questionCount) || 0,\n            isComplete: body.isComplete || false,\n            userId: body.userId || `user_${Date.now()}`,\n            isFirstExchange: false\n        }\n    }];\n} else {\n    // Error case\n    return [{\n        json: {\n            error: \"Invalid request format\",\n            userEmail: body.userEmail || \"unknown\",\n            conversation: [],\n            questionCount: 0,\n            isComplete: false\n        }\n    }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1616,
+        128
+      ],
+      "id": "708903e2-98b5-4aac-834e-928c4540c35a",
+      "name": "Initialize Conversation"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_URL_HERE",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "YOUR_GOOGLE_SHEET_URL_HERE"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ new Date().toISOString() }}",
+            "User ID": "={{ $('Initialize Conversation').item.json.userId }}",
+            "User Message": "={{ $('Initialize Conversation').item.json.userMessage }}",
+            "Email": "={{ $('Initialize Conversation').item.json.userEmail }}",
+            "AI Response": "={{ $('Pass Data Through').item.json.candidates[0].content.parts[0].text }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "User ID",
+              "displayName": "User ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "User Message",
+              "displayName": "User Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI Response",
+              "displayName": "AI Response",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        -1216,
+        128
+      ],
+      "id": "14d92386-145c-46e2-978d-f581eb1e5c12",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleApi": {
+          "id": "RDxE50T418MPUiSi",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "try {\n    // Safety checks\n    if (!$node || !$node[\"Pass Data Through\"] || !$node[\"Pass Data Through\"].json) {\n        return [{\n            json: {\n                error: \"No Gemini response received\",\n                userEmail: \"error@fallback.com\",\n                conversation: [],\n                isComplete: false,\n                questionCount: 0\n            }\n        }];\n    }\n\n    // Get data from the correct nodes\n    const geminiResponse = $node[\"Pass Data Through\"].json;\n    const initData = $node[\"Initialize Conversation\"].json;\n\n    // Safely extract AI response\n    const aiText = geminiResponse?.candidates?.[0]?.content?.parts?.[0]?.text || \"I couldn't generate a response. Please try again.\";\n    const cleanResponse = aiText.trim();\n\n    // Initialize conversation array\n    let currentConversation = [];\n    if (Array.isArray(initData.conversation)) {\n        currentConversation = [...initData.conversation];\n    } else {\n        currentConversation = [];\n    }\n\n    // Add user message FIRST (if not first exchange)\n    const userMessage = initData.userMessage || \"\";\n    const isFirstExchange = !userMessage || initData.isFirstExchange;\n    \n    if (!isFirstExchange && userMessage.trim()) {\n        currentConversation.push({\n            role: \"user\",\n            content: userMessage.replace(/[^\\w\\s\\.,!?-]/g, '') // ⚠️ SANITIZE special characters\n        });\n    }\n\n    // Then add AI response\n    currentConversation.push({ \n        role: \"assistant\", \n        content: cleanResponse.replace(/[^\\w\\s\\.,!?-]/g, '') // ⚠️ SANITIZE special characters\n    });\n\n    // Rest of your existing logic...\n    const currentQuestionCount = Number(initData.questionCount) || 0;\n    const newQuestionCount = currentQuestionCount + 1;\n\n    const userRequestedEnd = userMessage.toLowerCase().includes(\"end\") || \n                            userMessage.toLowerCase().includes(\"close\") ||\n                            userMessage.toLowerCase().includes(\"done\") ||\n                            userMessage.toLowerCase().includes(\"finish\");\n\n    const hasEnoughQuestions = newQuestionCount >= 2;\n    const isComplete = hasEnoughQuestions && userRequestedEnd;\n\n    return [{\n        json: {\n            status: isComplete ? \"consultation_complete\" : \"conversation_active\",\n            response: cleanResponse,\n            isComplete: isComplete,\n            conversation: currentConversation,\n            questionCount: newQuestionCount,\n            userEmail: initData.userEmail || '',\n            userId: initData.userId || 'anonymous',\n            nextAction: isComplete ? \"check_email_for_report\" : \"continue_chat\"\n        }\n    }];\n\n} catch (error) {\n    return [{\n        json: {\n            error: \"Processing failed: \" + error.message,\n            status: \"error\",\n            isComplete: false,\n            conversation: [],\n            questionCount: 0,\n            userEmail: \"error@fallback.com\",\n            fallback: true\n        }\n    }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1008,
+        128
+      ],
+      "id": "ea4d1a72-7da5-4c11-bb65-1a56ef169679",
+      "name": "Process Response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "418125a9-0563-4aca-8b80-0f32f0f9d5b8",
+              "leftValue": "={{ $json.isComplete }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -704,
+        128
+      ],
+      "id": "3536a856-0afc-42dc-9406-11ef7ebbfa70",
+      "name": "Check Completion"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{$env.GEMINI_API_KEY}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": {{ JSON.stringify(\"Based on the following health consultation conversation, generate a comprehensive health report in markdown format.\\n\\nConversation:\\n\" + (($('Check Completion').item.json.conversation || []).map(c => `**${c.role === 'user' ? 'Patient' : 'Health Consultant'}:** ${c.content}`).join('\\n\\n')) + \"\\n\\n---\\n\\nPlease create a detailed report with the following sections:\\n\\n## 🏥 HEALTH CONSULTATION SUMMARY\\n*Date: \" + $now.format('MMMM DD, YYYY') + \"*\\n\\n### 📋 SYMPTOMS & CONCERNS REPORTED\\n- List all symptoms mentioned by the patient\\n- Include frequency, duration, and severity when provided\\n\\n### 💡 PERSONALIZED RECOMMENDATIONS\\n\\n#### 🥗 Dietary Suggestions\\n- Specific recommendations based on symptoms\\n\\n#### 💤 Sleep & Rest Optimization\\n- Sleep hygiene recommendations\\n\\n#### 🏃‍♀️ Physical Activity Recommendations\\n- Appropriate exercise suggestions\\n\\n### ⚠️ IMPORTANT DISCLAIMERS\\n- This report is for informational purposes only\\n- Consult healthcare professionals for persistent symptoms\\n\\nGenerate a detailed, personalized report based on the conversation above.\") }}\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -384,
+        32
+      ],
+      "id": "80957352-6545-46fb-9632-33fbc34e7b4e",
+      "name": "Generate Health Report",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Check Completion').item.json.userEmail }}",
+        "subject": "=Your Personal Health Report - {{ $now.format(\"MMMM DD, YYYY\") }}",
+        "emailType": "text",
+        "message": "=Dear Health Consultation Participant,\n\nThank you for using our virtual health consultation service. Please find your personalized health report below:\n\n{{ $node[\"Generate Health Report\"].json.candidates[0].content.parts[0].text }}\n\n---\n\n🔒 PRIVACY NOTICE:\nThis report is confidential and intended only for you. Please store it securely.\n\n📧 SUPPORT:\nIf you have any questions about this report, please contact our support team.\n\n⚠️ MEDICAL DISCLAIMER:\nThis report provides general health information and suggestions based on our conversation. It is not a substitute for professional medical advice, diagnosis, or treatment. Always consult with qualified healthcare providers regarding any health concerns.\n\nBest regards,\nHealthMate Virtual Consultation Team\n\n---\nGenerated on: {{ $now.format(\"MMMM DD, YYYY [at] HH:mm\") }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -176,
+        32
+      ],
+      "id": "dcb564df-1acf-4fe5-aa07-6ac23e5d90ae",
+      "name": "Send Report Email",
+      "webhookId": "029125df-bc1f-4940-a238-65af00bc2651",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "1XkxRdg1Ncom7RzB",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ JSON.stringify({\n  status: \"conversation_active\",\n  response: $json.response,\n  isComplete: $json.isComplete,\n  conversation: $json.conversation,\n  questionCount: $json.questionCount,\n  userEmail: $json.userEmail,\n  userId: $json.userId,\n  nextAction: \"continue_chat\"\n}) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        64,
+        224
+      ],
+      "id": "db4a4203-f120-401c-ba61-2ada8197afdb",
+      "name": "Webhook Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=={{ JSON.stringify({\n  status: \"consultation_complete\",\n  message: \"Health consultation completed successfully\",\n  userEmail: $json.userEmail,\n  reportGenerated: true,\n  reportSent: true,\n  emailSentTo: $json.userEmail,\n  consultationSummary: {\n    totalQuestions: $json.questionCount,\n    conversationLength: $json.conversation.length,\n    completedAt: $now.format('YYYY-MM-DD HH:mm:ss')\n  },\n  nextAction: \"check_email_for_report\"\n}) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        64,
+        32
+      ],
+      "id": "62911ce9-d321-466e-a78b-2e79cd16bab8",
+      "name": "Webhook Response (Complete)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{$env.GEMINI_API_KEY}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": {{ JSON.stringify(\"You are a health consultant conducting a virtual health checkup. Follow these rules:\\n\\n1. Ask ONE health-related question at a time\\n2. Ask follow-up questions based on user responses\\n3. Continue the conversation for at least 5 exchanges before concluding\\n4. Focus on symptoms, lifestyle, diet, sleep, stress, and exercise\\n5. DO NOT end the conversation until you've gathered comprehensive information\\n6. DO NOT use the word 'COMPLETE' unless specifically instructed\\n7. Be empathetic and professional\\n\\n\" + (($json.isFirstExchange) ? \"Please introduce yourself as a health consultant and ask about their main health concerns.\" : \"Conversation history:\\n\" + (($json.conversation || []).map(c => (c.role === 'user' ? 'Patient' : 'Health Consultant') + ': ' + (c.content || '').replace(/[\\r\\n]+/g, ' ').replace(/[\\\"\\\\]/g, '')).join('\\n') + \"\\n\\nPatient just said: \" + ($json.userMessage || '').replace(/[\\r\\n]+/g, ' ').replace(/[\\\"\\\\]/g, '') + \"\\n\\nQuestion count: \" + ($json.questionCount || 0) + \"\\n\\nPlease respond to the patient's message above and ask one relevant follow-up question to gather more health information.\"))) }}\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1408,
+        128
+      ],
+      "id": "df2eceaa-9ef1-4c25-ba4b-1faeeec9107d",
+      "name": "Pass Data Through"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Initialize Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Conversation": {
+      "main": [
+        [
+          {
+            "node": "Pass Data Through",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Process Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Response": {
+      "main": [
+        [
+          {
+            "node": "Check Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Completion": {
+      "main": [
+        [
+          {
+            "node": "Generate Health Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Health Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Report Email": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response (Complete)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pass Data Through": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "Append row in sheet": [
+      {
+        "Timestamp": "2025-08-12T17:48:34.681Z\n",
+        "User ID": "test-user-123",
+        "User Message": "I've been having back pain",
+        "Email": "xyz48@gmail.com",
+        "AI Response": "Could you describe the headaches you're experiencing, such as their intensity, type of pain, or location?"
+      }
+    ]
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9ad6f9cc5e84e6d5ab45631b0d01c4f42e06edfb82e1bcd1743cda09a258f2bb"
+  }
+}
